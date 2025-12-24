@@ -1,0 +1,11 @@
+{
+  "name": "PlantDiseaseDetectionModel-Root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"yarn --cwd frontend start\" \"bash -c 'source backend/venv/bin/activate && uvicorn backend.server:app --reload --host 0.0.0.0 --port 8000'\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
