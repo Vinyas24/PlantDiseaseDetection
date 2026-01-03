@@ -1,9 +1,9 @@
+tensorflow==2.13.0
+keras==2.13.1
+numpy==1.24.3
+pillow==10.2.0
 fastapi==0.110.1
 uvicorn==0.29.0
-pydantic==2.7.4
+python-multipart==0.0.18
 python-dotenv==1.0.1
-numpy==1.26.4
-Pillow==10.1.0
-tensorflow==2.20.0
-typing-extensions==4.12.2
-python-multipart==0.0.6
+starlette==0.37.2
