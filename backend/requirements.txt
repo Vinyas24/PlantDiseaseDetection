@@ -1,7 +1,8 @@
+tensorflow==2.26.0
 fastapi==0.110.1
 uvicorn==0.29.0
-python-dotenv==1.0.1
 pydantic==2.7.4
-numpy==1.24.3
+python-dotenv==1.0.1
+numpy==1.26.4
 Pillow==10.1.0
-tensorflow==2.13.0
+typing-extensions==4.12.2
