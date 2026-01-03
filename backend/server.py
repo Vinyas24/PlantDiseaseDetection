@@ -16,22 +16,20 @@ from io import BytesIO
 from PIL import Image
 import numpy as np
 
+# TensorFlow/Keras imports
 try:
     import tensorflow as tf
-    from tensorflow.keras.applications import imagenet_utils
     from tensorflow.keras.models import load_model
     import keras
-
     try:
         keras.config.enable_unsafe_deserialization()
     except AttributeError:
         pass
-    
 except ImportError:
     tf = None
     load_model = None
-    imagenet_utils = None
 
+# Load .env
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
@@ -40,14 +38,17 @@ MODEL_FILE = os.environ.get("MODEL_FILE", str(ROOT_DIR / "plant_disease_model_au
 INPUT_SIZE = int(os.environ.get("INPUT_SIZE", 224))
 CLASS_NAMES_FILE = os.environ.get("CLASS_NAMES_FILE", "")
 
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
+# API router
 api_router = APIRouter(prefix="/api")
 
+# Load disease info CSV
 DISEASE_INFO = {}
 try:
     csv_path = ROOT_DIR / "disease_info.csv"
@@ -67,6 +68,7 @@ except Exception as e:
     logger.error(f"Error loading disease_info.csv: {str(e)}")
     DISEASE_INFO = {}
 
+# Pydantic models
 class StatusCheck(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -83,12 +85,14 @@ class PredictionResponse(BaseModel):
     possible_steps: Optional[str] = None
     image_url: Optional[str] = None
 
+# Global storage
 STATUS_STORE: List[dict] = []
 PREDICTIONS_STORE: List[dict] = []
 MODEL = None
 MODEL_LOAD_ERROR = None 
 CLASS_NAMES: List[str] = []
 
+# Load class names
 def load_class_names():
     global CLASS_NAMES
     if CLASS_NAMES_FILE:
@@ -103,6 +107,7 @@ def load_class_names():
         CLASS_NAMES = list(DISEASE_INFO.keys())
         return
 
+# Load Keras model safely
 def load_keras_model():
     global MODEL, MODEL_LOAD_ERROR
     if load_model is None:
@@ -119,13 +124,9 @@ def load_keras_model():
         return
 
     try:
-        MODEL = load_model(
-            str(model_path), 
-            compile=False, 
-            safe_mode=False,
-            custom_objects={"imagenet_utils": imagenet_utils}
-        )
-            
+        # Handle models with Lambda layers or custom functions if needed
+        custom_objects = {}
+        MODEL = load_model(str(model_path), compile=False, custom_objects=custom_objects)
         logger.info("Model loaded successfully")
         MODEL_LOAD_ERROR = None
     except Exception as e:
@@ -133,17 +134,17 @@ def load_keras_model():
         logger.error(f"Failed to load model: {e}", exc_info=True)
         MODEL = None
 
+# Image preprocessing
 def preprocess_image(contents: bytes, input_size: int = INPUT_SIZE) -> np.ndarray:
     img = Image.open(BytesIO(contents))
     if img.mode != "RGB":
         img = img.convert("RGB")
     img = img.resize((input_size, input_size), Image.LANCZOS) 
-    
     arr = np.asarray(img).astype("float32") 
-    
     arr = np.expand_dims(arr, axis=0)
     return arr
 
+# API endpoints
 @api_router.get("/")
 async def root():
     return {"message": "Hello World"}
@@ -181,18 +182,9 @@ async def predict_disease(file: UploadFile = File(...)):
             logger.error(detail_msg)
             raise HTTPException(status_code=500, detail=detail_msg)
 
-        try:
-            input_arr = preprocess_image(contents, INPUT_SIZE)
-        except Exception as e:
-            logger.error(f"Image preprocessing error: {e}")
-            raise HTTPException(status_code=400, detail="Error preprocessing image")
+        input_arr = preprocess_image(contents, INPUT_SIZE)
 
-        try:
-            preds = MODEL.predict(input_arr)
-        except Exception as e:
-            logger.error(f"Model prediction error: {e}")
-            raise HTTPException(status_code=500, detail="Error during model prediction")
-
+        preds = MODEL.predict(input_arr)
         preds = np.asarray(preds)
         if preds.ndim == 2 and preds.shape[0] == 1:
             preds = preds[0]
@@ -200,11 +192,7 @@ async def predict_disease(file: UploadFile = File(...)):
         class_idx = int(np.argmax(preds))
         confidence = float(np.max(preds))
 
-        if CLASS_NAMES and class_idx < len(CLASS_NAMES):
-            predicted_class = CLASS_NAMES[class_idx]
-        else:
-            predicted_class = str(class_idx)
-
+        predicted_class = CLASS_NAMES[class_idx] if CLASS_NAMES and class_idx < len(CLASS_NAMES) else str(class_idx)
         disease_info = DISEASE_INFO.get(predicted_class, {})
 
         prediction_record = {
@@ -232,13 +220,14 @@ async def predict_disease(file: UploadFile = File(...)):
         logger.exception(f"Unhandled error in /predict: {e}")
         raise HTTPException(status_code=500, detail="Error processing image")
 
+# App lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global MODEL
     load_class_names()
     load_keras_model()
     yield
 
+# FastAPI app
 app = FastAPI(lifespan=lifespan)
 app.include_router(api_router)
 app.add_middleware(
@@ -251,4 +240,4 @@ app.add_middleware(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
