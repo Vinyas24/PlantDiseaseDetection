@@ -18,6 +18,7 @@ import numpy as np
 
 try:
     import tensorflow as tf
+    from tensorflow.keras.applications import imagenet_utils
     from tensorflow.keras.models import load_model
     import keras
 
@@ -25,10 +26,11 @@ try:
         keras.config.enable_unsafe_deserialization()
     except AttributeError:
         pass
-
+    
 except ImportError:
     tf = None
     load_model = None
+    imagenet_utils = None
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -65,7 +67,6 @@ except Exception as e:
     logger.error(f"Error loading disease_info.csv: {str(e)}")
     DISEASE_INFO = {}
 
-# Pydantic models
 class StatusCheck(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -94,12 +95,14 @@ def load_class_names():
         p = Path(CLASS_NAMES_FILE)
         if p.exists():
             with open(p, "r", encoding="utf-8") as f:
-                CLASS_NAMES = [line.strip() for line in f.readlines() if line.strip()]
+                class_names = [line.strip() for line in f.readlines() if line.strip()]
+                CLASS_NAMES = class_names
             return
+
     if DISEASE_INFO:
         CLASS_NAMES = list(DISEASE_INFO.keys())
+        return
 
-# Load Keras model safely on Render
 def load_keras_model():
     global MODEL, MODEL_LOAD_ERROR
     if load_model is None:
@@ -109,19 +112,18 @@ def load_keras_model():
 
     model_path = Path(MODEL_FILE)
     logger.info(f"Looking for model at: {model_path.absolute()}")
-
+    
     if not model_path.exists():
         MODEL_LOAD_ERROR = f"File not found at {model_path.absolute()}"
         logger.error(MODEL_LOAD_ERROR)
         return
 
     try:
-        keras.config.enable_unsafe_deserialization()
+        from tensorflow.keras.applications.resnet50 import preprocess_input
         MODEL = load_model(
             str(model_path),
             compile=False,
-            safe_mode=False,
-            custom_objects={}  
+            custom_objects={"<lambda>": preprocess_input, "imagenet_utils": imagenet_utils}
         )
         logger.info("Model loaded successfully")
         MODEL_LOAD_ERROR = None
@@ -134,8 +136,8 @@ def preprocess_image(contents: bytes, input_size: int = INPUT_SIZE) -> np.ndarra
     img = Image.open(BytesIO(contents))
     if img.mode != "RGB":
         img = img.convert("RGB")
-    img = img.resize((input_size, input_size), Image.LANCZOS)
-    arr = np.asarray(img).astype("float32")
+    img = img.resize((input_size, input_size), Image.LANCZOS) 
+    arr = np.asarray(img).astype("float32") 
     arr = np.expand_dims(arr, axis=0)
     return arr
 
@@ -176,16 +178,30 @@ async def predict_disease(file: UploadFile = File(...)):
             logger.error(detail_msg)
             raise HTTPException(status_code=500, detail=detail_msg)
 
-        input_arr = preprocess_image(contents, INPUT_SIZE)
+        try:
+            input_arr = preprocess_image(contents, INPUT_SIZE)
+        except Exception as e:
+            logger.error(f"Image preprocessing error: {e}")
+            raise HTTPException(status_code=400, detail="Error preprocessing image")
 
-        preds = MODEL.predict(input_arr)
+        try:
+            preds = MODEL.predict(input_arr)
+        except Exception as e:
+            logger.error(f"Model prediction error: {e}")
+            raise HTTPException(status_code=500, detail="Error during model prediction")
+
         preds = np.asarray(preds)
         if preds.ndim == 2 and preds.shape[0] == 1:
             preds = preds[0]
-
+        
         class_idx = int(np.argmax(preds))
         confidence = float(np.max(preds))
-        predicted_class = CLASS_NAMES[class_idx] if CLASS_NAMES and class_idx < len(CLASS_NAMES) else str(class_idx)
+
+        if CLASS_NAMES and class_idx < len(CLASS_NAMES):
+            predicted_class = CLASS_NAMES[class_idx]
+        else:
+            predicted_class = str(class_idx)
+
         disease_info = DISEASE_INFO.get(predicted_class, {})
 
         prediction_record = {
@@ -215,6 +231,7 @@ async def predict_disease(file: UploadFile = File(...)):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global MODEL
     load_class_names()
     load_keras_model()
     yield
