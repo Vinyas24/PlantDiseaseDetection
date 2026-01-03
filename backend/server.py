@@ -15,13 +15,14 @@ import csv
 from io import BytesIO
 from PIL import Image
 import numpy as np
+import types
 
 try:
     import tensorflow as tf
     from tensorflow.keras.applications import imagenet_utils
     from tensorflow.keras.models import load_model
     import keras
-    keras.config.enable_unsafe_deserialization()  # allow unsafe loading
+    keras.config.enable_unsafe_deserialization()
 except ImportError:
     tf = None
     load_model = None
@@ -118,8 +119,8 @@ def load_keras_model():
         MODEL = load_model(
             str(model_path),
             compile=False,
-            safe_mode=False,  # allow Lambda layer deserialization
-            custom_objects={"imagenet_utils": imagenet_utils, "<lambda>": preprocess_input}
+            safe_mode=False,
+            custom_objects={"imagenet_utils": imagenet_utils, "<lambda>": types.FunctionType(preprocess_input.__code__, globals())}
         )
         logger.info("Model loaded successfully")
         MODEL_LOAD_ERROR = None
