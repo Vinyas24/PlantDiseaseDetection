@@ -21,12 +21,7 @@ try:
     from tensorflow.keras.applications import imagenet_utils
     from tensorflow.keras.models import load_model
     import keras
-
-    try:
-        keras.config.enable_unsafe_deserialization()
-    except AttributeError:
-        pass
-    
+    keras.config.enable_unsafe_deserialization()  # allow unsafe loading
 except ImportError:
     tf = None
     load_model = None
@@ -123,7 +118,8 @@ def load_keras_model():
         MODEL = load_model(
             str(model_path),
             compile=False,
-            custom_objects={"<lambda>": preprocess_input, "imagenet_utils": imagenet_utils}
+            safe_mode=False,  # allow Lambda layer deserialization
+            custom_objects={"imagenet_utils": imagenet_utils, "<lambda>": preprocess_input}
         )
         logger.info("Model loaded successfully")
         MODEL_LOAD_ERROR = None
