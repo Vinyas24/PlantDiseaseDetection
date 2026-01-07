@@ -15,7 +15,7 @@ from PIL import Image
 import numpy as np
 
 import tensorflow as tf
-from tensorflow.keras.models import load_model
+from huggingface_hub import hf_hub_download
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -23,7 +23,9 @@ load_dotenv(ROOT_DIR / ".env")
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 INPUT_SIZE = int(os.environ.get("INPUT_SIZE", 224))
 
-MODEL_FILE = ROOT_DIR / "plant_disease_model.keras"
+MODEL_REPO = "USERNAME/REPO_NAME"
+MODEL_FILENAME = "plant_disease_model.keras"
+
 CLASS_NAMES_FILE = ROOT_DIR / "class_names.txt"
 
 logging.basicConfig(level=logging.INFO)
@@ -76,16 +78,18 @@ def load_class_names():
 
 def load_keras_model():
     global MODEL
-    if not MODEL_FILE.exists():
-        raise RuntimeError("Model file not found")
-
-    MODEL = load_model(MODEL_FILE, compile=False)
-    logger.info("Model loaded successfully")
+    model_path = hf_hub_download(
+        repo_id=MODEL_REPO,
+        filename=MODEL_FILENAME
+    )
+    MODEL = tf.keras.models.load_model(model_path, compile=False)
+    logger.info("Model loaded successfully from Hugging Face")
 
 def preprocess_image(contents: bytes) -> np.ndarray:
     img = Image.open(BytesIO(contents)).convert("RGB")
     img = img.resize((INPUT_SIZE, INPUT_SIZE), Image.LANCZOS)
     arr = np.asarray(img, dtype="float32")
+    arr = tf.keras.applications.resnet50.preprocess_input(arr)
     arr = np.expand_dims(arr, axis=0)
     return arr
 
