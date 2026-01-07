@@ -1,10 +1,7 @@
 import os
 
-# --- CRITICAL RENDER FIXES ---
-# Prevent TF from pre-allocating massive amounts of memory
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
 os.environ['PYTHONHASHSEED'] = '0'
-# -----------------------------
 
 from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException
 from starlette.middleware.cors import CORSMiddleware
@@ -19,7 +16,7 @@ import csv
 from io import BytesIO
 from PIL import Image
 import numpy as np
-
+from tensorflow.keras.applications.resnet50 import preprocess_input
 import tensorflow as tf
 from huggingface_hub import hf_hub_download
 
@@ -59,18 +56,30 @@ class PredictionResponse(BaseModel):
     possible_steps: Optional[str] = None
     image_url: Optional[str] = None
 
+from tensorflow.keras.applications.resnet50 import preprocess_input
+
 def load_keras_model():
     global MODEL
     try:
-        logger.info("Downloading model from Hugging Face...")
+        logger.info("Fetching model...")
         model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILENAME)
         
-        logger.info(f"Loading model into RAM from {model_path}...")
-        # compile=False saves memory and time
-        MODEL = tf.keras.models.load_model(model_path, compile=False)
+        logger.info("Loading model with custom objects...")
+        
+        custom_objects = {
+            'preprocess_input': preprocess_input
+        }
+        
+        MODEL = tf.keras.models.load_model(
+            model_path, 
+            custom_objects=custom_objects, 
+            compile=False
+        )
+        
+        gc.collect()
         logger.info("Model loaded successfully!")
     except Exception as e:
-        logger.error(f"CRITICAL ERROR: Could not load model. Reason: {e}")
+        logger.error(f"Load failed: {e}")
         raise e
 
 def preprocess_image(contents: bytes) -> np.ndarray:
