@@ -75,7 +75,7 @@ def preprocess_image(contents: bytes) -> np.ndarray:
     img = Image.open(BytesIO(contents)).convert("RGB")
     img = img.resize((INPUT_SIZE, INPUT_SIZE), Image.LANCZOS)
     arr = np.asarray(img, dtype="float32")
-    arr = tf.keras.applications.resnet50.preprocess_input(arr)
+    arr = (arr / 127.5) - 1 
     arr = np.expand_dims(arr, axis=0)
     return arr
 
