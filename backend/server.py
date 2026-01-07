@@ -1,4 +1,11 @@
 import os
+
+# --- CRITICAL RENDER FIXES ---
+# Prevent TF from pre-allocating massive amounts of memory
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
+os.environ['PYTHONHASHSEED'] = '0'
+# -----------------------------
+
 from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException
 from starlette.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -12,12 +19,11 @@ import csv
 from io import BytesIO
 from PIL import Image
 import numpy as np
+
 import tensorflow as tf
 from huggingface_hub import hf_hub_download
-from tensorflow.keras.applications.resnet50 import preprocess_input
 
 ROOT_DIR = Path(__file__).parent
-
 CORS_ORIGINS = "*"
 INPUT_SIZE = 224
 
@@ -44,17 +50,7 @@ if csv_path.exists():
                 }
 
 CLASS_NAMES = list(DISEASE_INFO.keys())
-
 MODEL = None
-
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class StatusCheckCreate(BaseModel):
-    client_name: str
 
 class PredictionResponse(BaseModel):
     predicted_class: str
@@ -63,36 +59,34 @@ class PredictionResponse(BaseModel):
     possible_steps: Optional[str] = None
     image_url: Optional[str] = None
 
-STATUS_STORE: List[dict] = []
-PREDICTIONS_STORE: List[dict] = []
-
 def load_keras_model():
     global MODEL
-    model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILENAME)
-    MODEL = tf.keras.models.load_model(model_path, compile=False)
-    logger.info("Model loaded successfully")
+    try:
+        logger.info("Downloading model from Hugging Face...")
+        model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILENAME)
+        
+        logger.info(f"Loading model into RAM from {model_path}...")
+        # compile=False saves memory and time
+        MODEL = tf.keras.models.load_model(model_path, compile=False)
+        logger.info("Model loaded successfully!")
+    except Exception as e:
+        logger.error(f"CRITICAL ERROR: Could not load model. Reason: {e}")
+        raise e
 
 def preprocess_image(contents: bytes) -> np.ndarray:
     img = Image.open(BytesIO(contents)).convert("RGB")
     img = img.resize((INPUT_SIZE, INPUT_SIZE), Image.LANCZOS)
     arr = np.asarray(img, dtype="float32")
-    arr = preprocess_input(arr) 
+    arr[..., 0] -= 123.68
+    arr[..., 1] -= 116.779
+    arr[..., 2] -= 103.939
+    
     arr = np.expand_dims(arr, axis=0)
     return arr
 
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
-
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status = StatusCheck(**input.model_dump())
-    STATUS_STORE.append(status.model_dump())
-    return status
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    return STATUS_STORE
+    return {"message": "Plant Disease API is running"}
 
 @api_router.post("/predict", response_model=PredictionResponse)
 async def predict_disease(file: UploadFile = File(...)):
@@ -106,7 +100,7 @@ async def predict_disease(file: UploadFile = File(...)):
     idx = int(np.argmax(preds))
     confidence = float(preds[idx])
 
-    predicted_class = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else str(idx)
+    predicted_class = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else "Unknown"
     info = DISEASE_INFO.get(predicted_class, {})
 
     return PredictionResponse(
