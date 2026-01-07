@@ -205,7 +205,6 @@ const PredictionPage = () => {
             </button>
           )}
 
-          {/* Loading Spinner */}
           {loading && (
             <div className="loading-spinner" data-testid="loading-spinner">
               <div className="spinner"></div>
@@ -213,7 +212,6 @@ const PredictionPage = () => {
             </div>
           )}
 
-          {/* Error Message */}
           {error && (
             <div className="error-box" data-testid="error-message">
               <AlertCircle size={24} style={{ marginBottom: "0.5rem" }} />
@@ -221,7 +219,6 @@ const PredictionPage = () => {
             </div>
           )}
 
-          {/* Prediction Results */}
           {prediction && (
             <div className="result-box" data-testid="result-box">
               <h3>Detection Results</h3>
@@ -246,7 +243,6 @@ const PredictionPage = () => {
                 </span>
               </div>
 
-              {/* Disease Description */}
               {prediction.description && (
                 <div style={{ 
                   marginTop: "1.5rem", 
@@ -273,7 +269,6 @@ const PredictionPage = () => {
                 </div>
               )}
 
-              {/* Possible Steps */}
               {prediction.possible_steps && (
                 <div style={{ 
                   marginTop: "1rem", 
@@ -317,7 +312,6 @@ const PredictionPage = () => {
             </div>
           )}
 
-          {/* Back Button */}
           <Link to="/" className="back-button" data-testid="back-to-home-button">
             <ArrowLeft size={20} />
             Back to Home

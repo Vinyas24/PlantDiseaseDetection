@@ -22,7 +22,6 @@ const HomePage = () => {
 
   return (
     <div>
-      {/* Navigation */}
       <nav className={`navbar ${scrolled ? "scrolled" : ""}`}>
         <div className="navbar-container">
           <Link to="/" className="navbar-logo">
@@ -59,7 +58,6 @@ const HomePage = () => {
         </div>
       </nav>
 
-      {/* Hero Section */}
       <section className="hero-section" data-testid="hero-section">
         <div className="floating-shape shape-1"></div>
         <div className="floating-shape shape-2"></div>
@@ -104,7 +102,6 @@ const HomePage = () => {
         </div>
       </section>
 
-      {/* Methodology Section */}
       <section id="methodology" className="content-section" data-testid="methodology-section">
         <h2 className="section-title">Methodology</h2>
         <div className="section-content">

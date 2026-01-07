@@ -1,10 +1,7 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# IDE and editors
 .idea/
 .vscode/
 
-# Dependencies
 node_modules/
 /node_modules
 /.pnp
@@ -16,26 +13,20 @@ node_modules/
 !.yarn/releases
 !.yarn/versions
 
-# Testing
 /coverage
 
-# Next.js
 /.next/
 /out/
 next-env.d.ts
 *.tsbuildinfo
 
-# Production builds
 /build
 dist/
 dist
 
-# Environment files (comprehensive coverage)
-
 *token.json*
 *credentials.json*
 
-# Logs and debug files
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -52,13 +43,11 @@ __pycache__/
 venv/
 .venv/
 
-# Development tools
 chainlit.md
 .chainlit
 .ipynb_checkpoints/~``
 .ac
 
-# Deployment
 .vercel
 
 # Data and databases
@@ -72,6 +61,8 @@ agenthub/agents/youtube/db
 *.pack
 *.deb
 *.dylib
+*.keras
+
 
 # Build caches
 .cache/
