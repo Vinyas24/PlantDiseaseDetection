@@ -14,6 +14,7 @@ from PIL import Image
 import numpy as np
 import tensorflow as tf
 from huggingface_hub import hf_hub_download
+from tensorflow.keras.applications.resnet50 import preprocess_input
 
 ROOT_DIR = Path(__file__).parent
 
@@ -75,7 +76,7 @@ def preprocess_image(contents: bytes) -> np.ndarray:
     img = Image.open(BytesIO(contents)).convert("RGB")
     img = img.resize((INPUT_SIZE, INPUT_SIZE), Image.LANCZOS)
     arr = np.asarray(img, dtype="float32")
-    arr = (arr / 127.5) - 1 
+    arr = preprocess_input(arr) 
     arr = np.expand_dims(arr, axis=0)
     return arr
 
