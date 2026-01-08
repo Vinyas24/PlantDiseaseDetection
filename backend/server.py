@@ -77,7 +77,7 @@ def load_keras_model():
         model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILENAME)
         MODEL = tf.keras.models.load_model(model_path, compile=False)
         gc.collect()
-        logger.info("Model loaded successfully")
+        logger.info("Model loaded successfully!")
     except Exception as e:
         logger.error(f"Load failed: {e}")
         raise e
@@ -91,15 +91,19 @@ async def health():
 @api_router.post("/predict", response_model=PredictionResponse)
 async def predict_disease(file: UploadFile = File(...)):
     if MODEL is None:
-        raise HTTPException(status_code=503, detail="Model loading")
+        raise HTTPException(status_code=503, detail="Model loading...")
+    
     contents = await file.read()
     img = Image.open(BytesIO(contents)).convert("RGB")
     img = img.resize((224, 224), Image.LANCZOS)
     img_array = np.expand_dims(np.asarray(img, dtype="float32"), axis=0)
+
     preds = MODEL.predict(img_array, verbose=0)[0]
     idx = int(np.argmax(preds))
+    
     name = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else f"Unknown_{idx}"
     info = DISEASE_INFO.get(name, {})
+
     return PredictionResponse(
         predicted_class=name,
         confidence=float(preds[idx]),
@@ -115,9 +119,12 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-app.include_router(api_router)
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(api_router)
