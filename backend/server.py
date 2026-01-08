@@ -1,24 +1,21 @@
 import os
 import gc
 import logging
-import uuid
 import csv
 from pathlib import Path
 from io import BytesIO
-from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Optional
+from contextlib import asynccontextmanager
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['MALLOC_TRIM_THRESHOLD_'] = '100000'
 
+import numpy as np
+import tensorflow as tf
+from PIL import Image
 from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException
 from starlette.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from pydantic import BaseModel, Field
-from PIL import Image
-import numpy as np
-
-import tensorflow as tf
+from pydantic import BaseModel
 from huggingface_hub import hf_hub_download
 from tensorflow.keras.applications.resnet50 import preprocess_input
 
@@ -36,6 +33,13 @@ class PatchedRandomZoom(tf.keras.layers.RandomZoom):
     def __init__(self, **kwargs):
         kwargs.pop('data_format', None)
         super().__init__(**kwargs)
+
+tf.keras.utils.get_custom_objects().update({
+    'RandomFlip': PatchedRandomFlip,
+    'RandomRotation': PatchedRandomRotation,
+    'RandomZoom': PatchedRandomZoom,
+    'preprocess_input': preprocess_input
+})
 
 ROOT_DIR = Path(__file__).parent
 MODEL_REPO = "v1nyas/Plant-disease-detection-model"
@@ -66,69 +70,43 @@ def load_disease_metadata():
                 if name:
                     DISEASE_INFO[name] = row
                     CLASS_NAMES.append(name)
-    logger.info(f"Loaded {len(CLASS_NAMES)} classes from CSV.")
 
 def load_keras_model():
     global MODEL
     try:
-        logger.info("Downloading model...")
         model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILENAME)
-        
-        custom_objects = {
-            'RandomFlip': PatchedRandomFlip,
-            'RandomRotation': PatchedRandomRotation,
-            'RandomZoom': PatchedRandomZoom,
-            'preprocess_input': preprocess_input
-        }
-        
-        logger.info("Loading model...")
-        with tf.keras.utils.custom_object_scope(custom_objects):
-            MODEL = tf.keras.models.load_model(model_path, compile=False)
-        
+        MODEL = tf.keras.models.load_model(model_path, compile=False)
         gc.collect()
-        logger.info("Model loaded successfully!")
+        logger.info("Model loaded successfully")
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Load failed: {e}")
         raise e
 
 api_router = APIRouter(prefix="/api")
 
-@api_router.get("/")
-async def root():
-    return {"status": "online", "model_loaded": MODEL is not None}
+@api_router.get("/health")
+async def health():
+    return {"status": "ok", "model_ready": MODEL is not None}
 
 @api_router.post("/predict", response_model=PredictionResponse)
 async def predict_disease(file: UploadFile = File(...)):
     if MODEL is None:
-        raise HTTPException(status_code=503, detail="Model not initialized")
-    
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
-
-    try:
-        contents = await file.read()
-        img = Image.open(BytesIO(contents)).convert("RGB")
-        img = img.resize((224, 224), Image.LANCZOS)
-        img_array = np.asarray(img, dtype="float32")
-        img_array = np.expand_dims(img_array, axis=0)
-
-        preds = MODEL.predict(img_array, verbose=0)[0]
-        idx = int(np.argmax(preds))
-        confidence = float(preds[idx])
-
-        predicted_name = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else f"Unknown_{idx}"
-        info = DISEASE_INFO.get(predicted_name, {})
-
-        return PredictionResponse(
-            predicted_class=predicted_name,
-            confidence=confidence,
-            description=info.get("description"),
-            possible_steps=info.get("possible_steps"),
-            image_url=info.get("image_url")
-        )
-    except Exception as e:
-        logger.error(f"Prediction error: {e}")
-        raise HTTPException(status_code=500, detail="Internal processing error")
+        raise HTTPException(status_code=503, detail="Model loading")
+    contents = await file.read()
+    img = Image.open(BytesIO(contents)).convert("RGB")
+    img = img.resize((224, 224), Image.LANCZOS)
+    img_array = np.expand_dims(np.asarray(img, dtype="float32"), axis=0)
+    preds = MODEL.predict(img_array, verbose=0)[0]
+    idx = int(np.argmax(preds))
+    name = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else f"Unknown_{idx}"
+    info = DISEASE_INFO.get(name, {})
+    return PredictionResponse(
+        predicted_class=name,
+        confidence=float(preds[idx]),
+        description=info.get("description"),
+        possible_steps=info.get("possible_steps"),
+        image_url=info.get("image_url")
+    )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -137,18 +115,9 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(api_router)
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
