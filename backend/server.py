@@ -21,7 +21,6 @@ from huggingface_hub import hf_hub_download
 # that cause version compatibility failures (Keras 2 -> 3).
 try:
     import keras
-    # We use the internal library to ensure we catch ALL deserialization calls
     from keras.src.saving import serialization_lib
     
     orig_deserialize = serialization_lib.deserialize_keras_object
@@ -29,11 +28,16 @@ try:
     def patched_deserialize(config, custom_objects=None, **kwargs):
         def sanitize_config(obj):
             if isinstance(obj, dict):
+                # Map Keras 2 input shape to Keras 3 brand
+                if 'batch_input_shape' in obj:
+                    obj['batch_shape'] = obj.pop('batch_input_shape')
+                
                 # Remove problematic Keras 2/3 mismatch keys
+                # We NO LONGER remove batch_shape/batch_input_shape here.
                 problematic = [
-                    'quantization_config', 'batch_shape', 'batch_input_shape', 
-                    'data_format', 'mode', 'factor', 'height_factor', 'width_factor',
-                    'fill_mode', 'interpolation', 'seed', 'fill_value'
+                    'quantization_config', 'data_format', 'mode', 'factor', 
+                    'height_factor', 'width_factor', 'fill_mode', 
+                    'interpolation', 'seed', 'fill_value'
                 ]
                 for key in problematic:
                     obj.pop(key, None)
@@ -69,8 +73,6 @@ CUSTOM_OBJECTS = {
     'RandomFlip': BypassLayer,
     'RandomRotation': BypassLayer,
     'RandomZoom': BypassLayer,
-    'InputLayer': BypassLayer,
-    'Add': tf.keras.layers.Add,
     'Sequential': tf.keras.Sequential,
 }
 
