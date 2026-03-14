@@ -16,6 +16,16 @@ from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from huggingface_hub import hf_hub_download
 
+# --- MEMORY OPTIMIZATIONS ---
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0' # Sometimes saves RAM by avoiding specialized kernels
+try:
+    import keras
+    keras.config.set_floatx('float16') # Significantly reduces RAM usage for inference
+    logging.info("Keras floatx set to float16 for memory efficiency.")
+except:
+    pass
+
 # --- THE NUCLEAR PATCH ---
 # We intercept Keras deserialization at its core to strip out any arguments
 # that cause version compatibility failures (Keras 2 -> 3).
@@ -102,10 +112,18 @@ def load_disease_metadata():
 def load_keras_model():
     global MODEL
     try:
+        # Clear any existing state
+        tf.keras.backend.clear_session()
+        gc.collect()
+        
+        # Limit TF thread usage to reduce memory overhead
+        tf.config.threading.set_intra_op_parallelism_threads(1)
+        tf.config.threading.set_inter_op_parallelism_threads(1)
+
         logger.info("Downloading model from HF...")
         model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILENAME)
         
-        logger.info("Attempting model load with bypassed layers...")
+        logger.info(f"Loading model (float16) from {model_path}...")
         # compile=False is critical here. 
         # We use custom_object_scope to ensure even nested layers are intercepted.
         with tf.keras.utils.custom_object_scope(CUSTOM_OBJECTS):
@@ -138,14 +156,16 @@ async def predict_disease(file: UploadFile = File(...)):
     img = img.resize((224, 224))
     
     # Manual Preprocessing (matches ResNet50 requirements)
-    img_array = np.array(img).astype('float32')
+    img_array = np.array(img).astype('float16') 
     img_array = np.expand_dims(img_array, axis=0)
     img_array = preprocess_input(img_array)
     
-    # Simple ResNet preprocessing: Scale to [-1, 1] or similar if not using the Lambda layer
-    # Note: If your model has the Lambda(preprocess_input) layer, this is enough.
-    
     preds = MODEL.predict(img_array, verbose=0)[0]
+    
+    # Cleanup after prediction to prevent RAM bloat
+    del img_array
+    gc.collect()
+
     idx = np.argmax(preds)
     
     name = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else "Unknown"
