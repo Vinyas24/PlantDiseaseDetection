@@ -54,7 +54,7 @@ CUSTOM_OBJECTS = {
 tf.keras.utils.get_custom_objects().update(CUSTOM_OBJECTS)
 
 ROOT_DIR = Path(__file__).parent
-MODEL_REPO = "v1nyas/Plant-disease-detection-model"
+MODEL_REPO = "v1nyas/plant-disease-detection"
 MODEL_FILENAME = "plant_disease_model.keras"
 
 logging.basicConfig(level=logging.INFO)
