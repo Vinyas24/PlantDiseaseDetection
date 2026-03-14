@@ -16,63 +16,66 @@ from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from huggingface_hub import hf_hub_download
 
-# --- THE BRUTE FORCE FIX (v2) ---
-# We use a decorator to ensure Keras 3's serialization system finds our compatible versions.
-def make_compatible(cls, name):
-    if cls is None: return BypassLayer
+# --- THE NUCLEAR PATCH ---
+# We intercept Keras deserialization at its core to strip out any arguments
+# that cause version compatibility failures (Keras 2 -> 3).
+try:
+    import keras
+    # We use the internal library to ensure we catch ALL deserialization calls
+    from keras.src.saving import serialization_lib
     
-    @tf.keras.utils.register_keras_serializable(package="Compatibility", name=name)
-    class CompatibleLayer(cls):
-        def __init__(self, **kwargs):
-            # Strip offending Keras 2/3 mismatch arguments
-            offenders = [
-                'data_format', 'mode', 'factor', 'height_factor', 'width_factor', 
-                'fill_mode', 'interpolation', 'seed', 'fill_value', 'batch_shape',
-                'sparse', 'ragged', 'quantization_config', 'batch_input_shape'
-            ]
-            for arg in offenders: kwargs.pop(arg, None)
-            super().__init__(**kwargs)
-        
-        @classmethod
-        def from_config(cls, config):
-            # Deep-clean the config before init
-            for k in ['module', 'class_name', 'registered_name']: config.pop(k, None)
-            return cls(**config)
-            
-    # Also patch the __name__ to match original for some legacy loaders
-    CompatibleLayer.__name__ = cls.__name__
-    return CompatibleLayer
+    orig_deserialize = serialization_lib.deserialize_keras_object
+    
+    def patched_deserialize(config, custom_objects=None, **kwargs):
+        def sanitize_config(obj):
+            if isinstance(obj, dict):
+                # Remove problematic Keras 2/3 mismatch keys
+                problematic = [
+                    'quantization_config', 'batch_shape', 'batch_input_shape', 
+                    'data_format', 'mode', 'factor', 'height_factor', 'width_factor',
+                    'fill_mode', 'interpolation', 'seed', 'fill_value'
+                ]
+                for key in problematic:
+                    obj.pop(key, None)
+                for val in obj.values():
+                    sanitize_config(val)
+            elif isinstance(obj, list):
+                for item in obj:
+                    sanitize_config(item)
 
-@tf.keras.utils.register_keras_serializable(package="Compatibility", name="BypassLayer")
+        if isinstance(config, dict):
+            sanitize_config(config)
+            # Ensure the class_name mapping is respected
+            if custom_objects:
+                cls_name = config.get('class_name')
+                if cls_name in custom_objects:
+                    config['module'] = '__main__' # Force lookup in custom_objects
+        
+        return orig_deserialize(config, custom_objects=custom_objects, **kwargs)
+    
+    serialization_lib.deserialize_keras_object = patched_deserialize
+    logging.info("Keras deserialization nuclear patch armed.")
+except Exception as e:
+    logging.warning(f"Nuclear patch failed to initialize: {e}")
+
+# Preprocessing layers are identity during inference
 class BypassLayer(tf.keras.layers.Layer):
     def __init__(self, **kwargs): super().__init__()
     def call(self, inputs): return inputs
     @classmethod
     def from_config(cls, config): return cls()
 
-# Map EVERYTHING to catch all possible deserialization paths
 CUSTOM_OBJECTS = {
     'RandomFlip': BypassLayer,
     'RandomRotation': BypassLayer,
     'RandomZoom': BypassLayer,
     'InputLayer': BypassLayer,
-    'Dense': make_compatible(tf.keras.layers.Dense, 'Dense'),
-    'Conv2D': make_compatible(tf.keras.layers.Conv2D, 'Conv2D'),
-    'BatchNormalization': make_compatible(tf.keras.layers.BatchNormalization, 'BatchNormalization'),
-    'Activation': make_compatible(tf.keras.layers.Activation, 'Activation'),
-    'MaxPooling2D': make_compatible(tf.keras.layers.MaxPooling2D, 'MaxPooling2D'),
-    'ZeroPadding2D': make_compatible(tf.keras.layers.ZeroPadding2D, 'ZeroPadding2D'),
-    'GlobalAveragePooling2D': make_compatible(tf.keras.layers.GlobalAveragePooling2D, 'GlobalAveragePooling2D'),
-    'Flatten': make_compatible(tf.keras.layers.Flatten, 'Flatten'),
-    'Add': make_compatible(tf.keras.layers.Add, 'Add'),
+    'Add': tf.keras.layers.Add,
     'Sequential': tf.keras.Sequential,
 }
 
-# Apply globally as well
-tf.keras.utils.get_custom_objects().update(CUSTOM_OBJECTS)
-
 ROOT_DIR = Path(__file__).parent
-MODEL_REPO = "v1nyas/plant-disease-detection"
+MODEL_REPO = "v1nyas/Plant-disease-detection-model"
 MODEL_FILENAME = "plant_disease_model.keras"
 
 logging.basicConfig(level=logging.INFO)
