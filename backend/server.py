@@ -16,56 +16,59 @@ from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from huggingface_hub import hf_hub_download
 
-# --- THE BRUTE FORCE FIX ---
-# Define a helper to strip problematic arguments from any layer
-def make_compatible(cls):
+# --- THE BRUTE FORCE FIX (v2) ---
+# We use a decorator to ensure Keras 3's serialization system finds our compatible versions.
+def make_compatible(cls, name):
     if cls is None: return BypassLayer
+    
+    @tf.keras.utils.register_keras_serializable(package="Compatibility", name=name)
     class CompatibleLayer(cls):
         def __init__(self, **kwargs):
-            # Aggressively remove arguments that cause Keras 2/3 mismatch errors
-            for arg in [
+            # Strip offending Keras 2/3 mismatch arguments
+            offenders = [
                 'data_format', 'mode', 'factor', 'height_factor', 'width_factor', 
                 'fill_mode', 'interpolation', 'seed', 'fill_value', 'batch_shape',
                 'sparse', 'ragged', 'quantization_config', 'batch_input_shape'
-            ]:
-                kwargs.pop(arg, None)
+            ]
+            for arg in offenders: kwargs.pop(arg, None)
             super().__init__(**kwargs)
+        
         @classmethod
         def from_config(cls, config):
-            config.pop('module', None)
-            config.pop('class_name', None)
-            config.pop('registered_name', None)
+            # Deep-clean the config before init
+            for k in ['module', 'class_name', 'registered_name']: config.pop(k, None)
             return cls(**config)
+            
+    # Also patch the __name__ to match original for some legacy loaders
+    CompatibleLayer.__name__ = cls.__name__
     return CompatibleLayer
 
-# Preprocessing layers are bypassed (identity) because they are training-only
+@tf.keras.utils.register_keras_serializable(package="Compatibility", name="BypassLayer")
 class BypassLayer(tf.keras.layers.Layer):
-    def __init__(self, **kwargs):
-        super().__init__()
+    def __init__(self, **kwargs): super().__init__()
     def call(self, inputs): return inputs
     @classmethod
     def from_config(cls, config): return cls()
 
-# Core layers are made compatible by stripping unknown args but keeping functionality
+# Map EVERYTHING to catch all possible deserialization paths
 CUSTOM_OBJECTS = {
     'RandomFlip': BypassLayer,
     'RandomRotation': BypassLayer,
     'RandomZoom': BypassLayer,
     'InputLayer': BypassLayer,
-    'Dense': make_compatible(tf.keras.layers.Dense),
-    'Conv2D': make_compatible(tf.keras.layers.Conv2D),
-    'BatchNormalization': make_compatible(tf.keras.layers.BatchNormalization),
-    'Activation': make_compatible(tf.keras.layers.Activation),
-    'MaxPooling2D': make_compatible(tf.keras.layers.MaxPooling2D),
-    'ZeroPadding2D': make_compatible(tf.keras.layers.ZeroPadding2D),
-    'GlobalAveragePooling2D': make_compatible(tf.keras.layers.GlobalAveragePooling2D),
-    'Flatten': make_compatible(tf.keras.layers.Flatten),
-    'Add': make_compatible(tf.keras.layers.Add),
-    'Lambda': tf.keras.layers.Lambda, 
+    'Dense': make_compatible(tf.keras.layers.Dense, 'Dense'),
+    'Conv2D': make_compatible(tf.keras.layers.Conv2D, 'Conv2D'),
+    'BatchNormalization': make_compatible(tf.keras.layers.BatchNormalization, 'BatchNormalization'),
+    'Activation': make_compatible(tf.keras.layers.Activation, 'Activation'),
+    'MaxPooling2D': make_compatible(tf.keras.layers.MaxPooling2D, 'MaxPooling2D'),
+    'ZeroPadding2D': make_compatible(tf.keras.layers.ZeroPadding2D, 'ZeroPadding2D'),
+    'GlobalAveragePooling2D': make_compatible(tf.keras.layers.GlobalAveragePooling2D, 'GlobalAveragePooling2D'),
+    'Flatten': make_compatible(tf.keras.layers.Flatten, 'Flatten'),
+    'Add': make_compatible(tf.keras.layers.Add, 'Add'),
     'Sequential': tf.keras.Sequential,
 }
 
-# Update global registry
+# Apply globally as well
 tf.keras.utils.get_custom_objects().update(CUSTOM_OBJECTS)
 
 ROOT_DIR = Path(__file__).parent
@@ -98,13 +101,14 @@ def load_keras_model():
         model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILENAME)
         
         logger.info("Attempting model load with bypassed layers...")
-        # compile=False is critical here
-        MODEL = tf.keras.models.load_model(
-            model_path, 
-            custom_objects=CUSTOM_OBJECTS,
-            compile=False, 
-            safe_mode=False
-        )
+        # compile=False is critical here. 
+        # We use custom_object_scope to ensure even nested layers are intercepted.
+        with tf.keras.utils.custom_object_scope(CUSTOM_OBJECTS):
+            MODEL = tf.keras.models.load_model(
+                model_path, 
+                compile=False, 
+                safe_mode=False
+            )
         
         logger.info("Model loaded successfully!")
         gc.collect()
