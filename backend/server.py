@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras.applications.resnet50 import preprocess_input
 from PIL import Image
 from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException
 from starlette.middleware.cors import CORSMiddleware
@@ -16,29 +17,41 @@ from pydantic import BaseModel
 from huggingface_hub import hf_hub_download
 
 # --- THE BRUTE FORCE FIX ---
-# We define these as "Do Nothing" layers so Keras stops complaining 
-# about the config/data_format during load.
+# Define a robust "Do Nothing" layer that survives Keras 2 -> 3 transitions
 class BypassLayer(tf.keras.layers.Layer):
     def __init__(self, **kwargs):
-        kwargs.pop('data_format', None)
-        kwargs.pop('mode', None)
-        kwargs.pop('factor', None)
-        kwargs.pop('height_factor', None)
-        kwargs.pop('width_factor', None)
-        kwargs.pop('fill_mode', None)
-        kwargs.pop('interpolation', None)
-        kwargs.pop('seed', None)
-        kwargs.pop('fill_value', None)
+        # List of all known problematic Keras 2/3 arguments for preprocessing layers
+        problematic_kwargs = [
+            'data_format', 'mode', 'factor', 'height_factor', 'width_factor', 
+            'fill_mode', 'interpolation', 'seed', 'fill_value', 'batch_shape',
+            'sparse', 'ragged'
+        ]
+        for arg in problematic_kwargs:
+            kwargs.pop(arg, None)
         super().__init__(**kwargs)
-    def call(self, inputs): return inputs
 
-# Register EVERYTHING that could possibly fail as a BypassLayer
-tf.keras.utils.get_custom_objects().update({
+    def call(self, inputs): 
+        return inputs
+
+    @classmethod
+    def from_config(cls, config):
+        # Absorb everything from config to avoid deserialization errors
+        config.pop('module', None)
+        config.pop('class_name', None)
+        config.pop('registered_name', None)
+        return cls(**config)
+
+# Map problematic layers to our BypassLayer
+CUSTOM_OBJECTS = {
     'RandomFlip': BypassLayer,
     'RandomRotation': BypassLayer,
     'RandomZoom': BypassLayer,
-    'Sequential': tf.keras.Sequential, # Ensure Sequential is mapped correctly
-})
+    'InputLayer': BypassLayer,
+    'Sequential': tf.keras.Sequential,
+}
+
+# Update global registry
+tf.keras.utils.get_custom_objects().update(CUSTOM_OBJECTS)
 
 ROOT_DIR = Path(__file__).parent
 MODEL_REPO = "v1nyas/Plant-disease-detection-model"
@@ -71,7 +84,12 @@ def load_keras_model():
         
         logger.info("Attempting model load with bypassed layers...")
         # compile=False is critical here
-        MODEL = tf.keras.models.load_model(model_path, compile=False, safe_mode=False)
+        MODEL = tf.keras.models.load_model(
+            model_path, 
+            custom_objects=CUSTOM_OBJECTS,
+            compile=False, 
+            safe_mode=False
+        )
         
         logger.info("Model loaded successfully!")
         gc.collect()
@@ -98,6 +116,7 @@ async def predict_disease(file: UploadFile = File(...)):
     # Manual Preprocessing (matches ResNet50 requirements)
     img_array = np.array(img).astype('float32')
     img_array = np.expand_dims(img_array, axis=0)
+    img_array = preprocess_input(img_array)
     
     # Simple ResNet preprocessing: Scale to [-1, 1] or similar if not using the Lambda layer
     # Note: If your model has the Lambda(preprocess_input) layer, this is enough.
