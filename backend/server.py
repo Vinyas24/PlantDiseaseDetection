@@ -17,36 +17,51 @@ from pydantic import BaseModel
 from huggingface_hub import hf_hub_download
 
 # --- THE BRUTE FORCE FIX ---
-# Define a robust "Do Nothing" layer that survives Keras 2 -> 3 transitions
+# Define a helper to strip problematic arguments from any layer
+def make_compatible(cls):
+    if cls is None: return BypassLayer
+    class CompatibleLayer(cls):
+        def __init__(self, **kwargs):
+            # Aggressively remove arguments that cause Keras 2/3 mismatch errors
+            for arg in [
+                'data_format', 'mode', 'factor', 'height_factor', 'width_factor', 
+                'fill_mode', 'interpolation', 'seed', 'fill_value', 'batch_shape',
+                'sparse', 'ragged', 'quantization_config', 'batch_input_shape'
+            ]:
+                kwargs.pop(arg, None)
+            super().__init__(**kwargs)
+        @classmethod
+        def from_config(cls, config):
+            config.pop('module', None)
+            config.pop('class_name', None)
+            config.pop('registered_name', None)
+            return cls(**config)
+    return CompatibleLayer
+
+# Preprocessing layers are bypassed (identity) because they are training-only
 class BypassLayer(tf.keras.layers.Layer):
     def __init__(self, **kwargs):
-        # List of all known problematic Keras 2/3 arguments for preprocessing layers
-        problematic_kwargs = [
-            'data_format', 'mode', 'factor', 'height_factor', 'width_factor', 
-            'fill_mode', 'interpolation', 'seed', 'fill_value', 'batch_shape',
-            'sparse', 'ragged'
-        ]
-        for arg in problematic_kwargs:
-            kwargs.pop(arg, None)
-        super().__init__(**kwargs)
-
-    def call(self, inputs): 
-        return inputs
-
+        super().__init__()
+    def call(self, inputs): return inputs
     @classmethod
-    def from_config(cls, config):
-        # Absorb everything from config to avoid deserialization errors
-        config.pop('module', None)
-        config.pop('class_name', None)
-        config.pop('registered_name', None)
-        return cls(**config)
+    def from_config(cls, config): return cls()
 
-# Map problematic layers to our BypassLayer
+# Core layers are made compatible by stripping unknown args but keeping functionality
 CUSTOM_OBJECTS = {
     'RandomFlip': BypassLayer,
     'RandomRotation': BypassLayer,
     'RandomZoom': BypassLayer,
     'InputLayer': BypassLayer,
+    'Dense': make_compatible(tf.keras.layers.Dense),
+    'Conv2D': make_compatible(tf.keras.layers.Conv2D),
+    'BatchNormalization': make_compatible(tf.keras.layers.BatchNormalization),
+    'Activation': make_compatible(tf.keras.layers.Activation),
+    'MaxPooling2D': make_compatible(tf.keras.layers.MaxPooling2D),
+    'ZeroPadding2D': make_compatible(tf.keras.layers.ZeroPadding2D),
+    'GlobalAveragePooling2D': make_compatible(tf.keras.layers.GlobalAveragePooling2D),
+    'Flatten': make_compatible(tf.keras.layers.Flatten),
+    'Add': make_compatible(tf.keras.layers.Add),
+    'Lambda': tf.keras.layers.Lambda, 
     'Sequential': tf.keras.Sequential,
 }
 
