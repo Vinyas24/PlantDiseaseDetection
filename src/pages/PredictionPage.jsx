@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Upload, ArrowLeft, Leaf, AlertCircle } from "lucide-react";
 import axios from "axios";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000";
 const API = `${BACKEND_URL}/api`;
 
 const PredictionPage = () => {

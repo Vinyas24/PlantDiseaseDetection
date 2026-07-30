@@ -32,42 +32,49 @@ except:
 try:
     import keras
     from keras.src.saving import serialization_lib
-    
-    orig_deserialize = serialization_lib.deserialize_keras_object
-    
-    def patched_deserialize(config, custom_objects=None, **kwargs):
-        def sanitize_config(obj):
-            if isinstance(obj, dict):
-                # Map Keras 2 input shape to Keras 3 brand
-                if 'batch_input_shape' in obj:
-                    obj['batch_shape'] = obj.pop('batch_input_shape')
-                
-                # Remove problematic Keras 2/3 mismatch keys
-                # We NO LONGER remove batch_shape/batch_input_shape here.
-                problematic = [
-                    'quantization_config', 'data_format', 'mode', 'factor', 
-                    'height_factor', 'width_factor', 'fill_mode', 
-                    'interpolation', 'seed', 'fill_value'
-                ]
-                for key in problematic:
-                    obj.pop(key, None)
-                for val in obj.values():
-                    sanitize_config(val)
-            elif isinstance(obj, list):
-                for item in obj:
-                    sanitize_config(item)
+    from keras.src.legacy.saving import serialization as legacy_serialization
 
-        if isinstance(config, dict):
-            sanitize_config(config)
-            # Ensure the class_name mapping is respected
-            if custom_objects:
-                cls_name = config.get('class_name')
-                if cls_name in custom_objects:
-                    config['module'] = '__main__' # Force lookup in custom_objects
-        
-        return orig_deserialize(config, custom_objects=custom_objects, **kwargs)
-    
-    serialization_lib.deserialize_keras_object = patched_deserialize
+    def make_patched_deserialize(orig_deserialize):
+        def patched_deserialize(config, custom_objects=None, **kwargs):
+            def sanitize_config(obj):
+                if isinstance(obj, dict):
+                    # Map Keras 2 input shape to Keras 3 brand
+                    if 'batch_input_shape' in obj:
+                        obj['batch_shape'] = obj.pop('batch_input_shape')
+
+                    # Remove problematic Keras 2/3 mismatch keys
+                    problematic = [
+                        'quantization_config', 'data_format', 'mode', 'factor', 
+                        'height_factor', 'width_factor', 'fill_mode', 
+                        'interpolation', 'seed', 'fill_value'
+                    ]
+                    for key in list(obj.keys()):
+                        if key in problematic:
+                            obj.pop(key, None)
+                    for val in obj.values():
+                        sanitize_config(val)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        sanitize_config(item)
+
+            if isinstance(config, dict):
+                sanitize_config(config)
+                # Ensure the class_name mapping is respected
+                if custom_objects:
+                    cls_name = config.get('class_name')
+                    if cls_name in custom_objects:
+                        config['module'] = '__main__'
+
+            return orig_deserialize(config, custom_objects=custom_objects, **kwargs)
+
+        return patched_deserialize
+
+    serialization_lib.deserialize_keras_object = make_patched_deserialize(
+        serialization_lib.deserialize_keras_object
+    )
+    legacy_serialization.deserialize_keras_object = make_patched_deserialize(
+        legacy_serialization.deserialize_keras_object
+    )
     logging.info("Keras deserialization nuclear patch armed.")
 except Exception as e:
     logging.warning(f"Nuclear patch failed to initialize: {e}")
@@ -88,7 +95,7 @@ CUSTOM_OBJECTS = {
 
 ROOT_DIR = Path(__file__).parent
 MODEL_REPO = "v1nyas/plant-disease-detection"
-MODEL_FILENAME = "plant_disease_model.keras"
+MODEL_FILENAME = "plant_disease_model.h5"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
